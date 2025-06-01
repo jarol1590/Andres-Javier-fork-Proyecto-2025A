@@ -295,7 +295,7 @@ class QNodes(SIA):
         total = len(vertices_fase) - 2
 
         # CREA EL POOL UNA SOLA VEZ
-        with multiprocessing.Pool() as pool:
+        with multiprocessing.Pool(processes=6) as pool:
             for i in range(len(vertices_fase) - 2):
                 self.logger.debug(f"total: {total - i}")
                 omegas_ciclo = [vertices_fase[0]]

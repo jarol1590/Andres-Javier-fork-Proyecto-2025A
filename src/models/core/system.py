@@ -9,6 +9,8 @@ from src.models.base.application import aplicacion
 
 from src.constants.base import COLS_IDX
 
+import concurrent.futures
+
 
 class System:
     """
@@ -151,79 +153,27 @@ class System:
     ) -> "System":
         """
         Permite substraer una serie de elementos a partir de un sistema completo o sun sisteam candidato tanto en el futuro/alcance como el presente/mecanismo, logrando así la generación de un subsistema.
-
-        Args:
-        ----
-            - `alcance_dims` (NDArray[np.int8]): En este arreglo se encuentran las variables que van a ser eliminadas, puesto es el alcance/futuro significa que los cubos que pertenezcan a estos índices serán descartados.
-            - `mecanismo_dims` (NDArray[np.int8]): Acá preceden las dimensiones asociadas a cada n-cubo, donde para cada uno se aplicará la operación de agrupación por promedio, solapando múltiples caras del n-cubo.
-
-        Returns:
-        -------
-            System: Este subsistema servirá para procesos posteriores de particionamiento.
-
-        Examples:
-        --------
-        >>> alcances = np.array([0])
-        >>> mecanismos = np.array([2])
-        >>> mi_sistema
-        System(indices=[0 1 2], sub_dims=[0 1 2])
-            Initial state: [1 0 0]
-            NCubes:
-                NCube(index=0):
-                    dims=[0 1 2]
-                    shape=(2, 2, 2)
-                    data=
-                        [[[0. 0.]
-                        [1. 1.]],
-                        [[1. 1.]
-                        [1. 1.]]]
-                NCube(index=1):
-                    dims=[0 1 2]
-                    shape=(2, 2, 2)
-                    data=
-                        [[[0. 0.]
-                        [0. 0.]],
-                        [[0. 1.]
-                        [0. 1.]]]
-                NCube(index=2):
-                    dims=[0 1 2]
-                    shape=(2, 2, 2)
-                    data=
-                        [[[0. 1.]
-                        [1. 0.]],
-                        [[0. 1.]
-                        [1. 0.]]]
-        >>> mi_sistema.substraer(alcances, mecanismos)
-        System(indices=[1 2], sub_dims=[0 1])
-            Initial state: [1 0 0]
-            NCubes:
-                NCube(index=1):
-                    dims=[0 1]
-                    shape=(2, 2)
-                    data=
-                        [[0.  0.5]
-                        [0.  0.5]]
-                NCube(index=2):
-                    dims=[0 1]
-                    shape=(2, 2)
-                    data=
-                        [[0. 1.]
-                        [1. 0.]]
-
-        Los indices asociados a los literales o variables independiente al tiempo son `0:(A|a), 1:(B|b), 2:(C|c)`.
-        En el ejemplo se aprecia lo que puede representarse como que el sistema `V={A_abc,B_abc,C_abc}` sufrió una martinalización en `A in (t+1)`, dejando `B` y `C`, sobre los que se aplicó luego una marginalización en `c in (t)`.
+        ...docstring...
         """
         valid_futures = np.setdiff1d(self.indices_ncubos, alcance_dims)
         new_sys = System.__new__(System)
         new_sys.estado_inicial = self.estado_inicial
         new_sys.tpm = self.tpm
         new_sys.notacion = self.notacion
-        new_sys.ncubos = tuple(
-            cube.marginalizar(mecanismo_dims)
-            for cube in self.ncubos
-            if cube.indice in valid_futures
-        )
+
+        def _marginalizar_cubo_sub(args):
+            cube, mecanismo_dims = args
+            return cube.marginalizar(mecanismo_dims)
+
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            new_sys.ncubos = tuple(
+                executor.map(
+                    _marginalizar_cubo_sub,
+                    [(cube, mecanismo_dims) for cube in self.ncubos if cube.indice in valid_futures]
+                )
+            )
         return new_sys
+
 
     def bipartir(
         self,
@@ -232,25 +182,29 @@ class System:
     ) -> "System":
         """
         Es en este método donde generamos a partir de un subsistema, una bipartición.
-
-        Args:
-            alcance (NDArray[np.int8]): Variables futuras que idedalmente hacen parte del subsistema, estas seleccionan un subconjunto dentro del mismo el cuál será marginalizado en las dimensiones excluídas.
-            mecanismo (NDArray[np.int8]): Acá está el conjunto de dimensiones primales dadas, donde marginalizarán todos los n-cubos cuyo índice no haga parte del alcance.
-
-        Returns:
-            System: Se retorna una bipartición, acá es importante tener muy claro que puede o no haber pérdida con respecto al sub-sistema original y por ende, se analizará mediante una distancia métrica cono la EMD-Effect la diferencia entre las distribuciones marginales de estos dos "sistemas", apreciando si hay diferencia como una "pérdida" en la información respecto al sub-sistema original.
+        ...docstring...
         """
         new_sys = System.__new__(System)
         new_sys.estado_inicial = self.estado_inicial
         new_sys.tpm = self.tpm
-        new_sys.ncubos = tuple(
-            cube.marginalizar(np.setdiff1d(cube.dims, mecanismo))
-            if cube.indice in alcance
-            else cube.marginalizar(mecanismo)
-            for cube in self.ncubos
-        )
-        return new_sys
+        new_sys.notacion = self.notacion
 
+        def _marginalizar_cubo(args):
+            cube, alcance, mecanismo = args
+            if cube.indice in alcance:
+                return cube.marginalizar(np.setdiff1d(cube.dims, mecanismo))
+            else:
+                return cube.marginalizar(mecanismo)
+
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            new_sys.ncubos = tuple(
+                executor.map(
+                    _marginalizar_cubo,
+                    [(cube, alcance, mecanismo) for cube in self.ncubos]
+                )
+            )
+        return new_sys
+    
     def distribucion_marginal(self):
         """
         Partiendo de idealmente un subsistema o una bipartición como entrada, se seleccionana los nodos/elementos cuando su estado es OFF o inactivo para cada uno de ellos, mediante la propiedad de las distribuciones marginales, esto nos permite calcular más eficientemente la EMD-Effect, logrando así determinar un coste para dar comparación entre idealmente, un sub-sistema y una bipartición. Hemos de aplicar una reversión en la selección del estado inicial puesto
