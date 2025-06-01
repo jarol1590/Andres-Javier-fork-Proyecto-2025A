@@ -10,6 +10,8 @@ from src.models.base.application import aplicacion
 from src.constants.base import COLS_IDX
 
 
+
+
 class System:
     """
     La clase sistema es la encargada de realizar las operaciones de condicionamiento, substracción para generación de subsistemas y obtención de las distribuciones marginales para realizar eficientemente el cálculo de la EMD en el Efecto.
@@ -40,6 +42,10 @@ class System:
             )
             for i in range(n_nodes)
         )
+        
+        #para conocer el tamaño de los n-cubos
+        for cube in self.ncubos:
+            print(f"NCube {cube.indice}: {cube.data.nbytes / 1024:.2f} KB")
 
     @property
     def indices_ncubos(self):

@@ -8,6 +8,9 @@ from src.funcs.format import fmt_biparte_q
 from src.controllers.manager import Manager
 from src.models.base.sia import SIA
 
+
+from concurrent.futures import ThreadPoolExecutor
+
 from src.models.core.solution import Solution
 from src.constants.models import (
     QNODES_ANALYSIS_TAG,
@@ -232,15 +235,22 @@ class QNodes(SIA):
 
             emd_particion_candidata = INFTY_POS
 
+           
+
+# ...existing code inside algorithm...
+
             for j in range(len(deltas_ciclo) - 1):
-                # self.logger.critic(f"   {j=}")
                 emd_local = 1e5
                 indice_mip: int
 
-                for k in range(len(deltas_ciclo)):
-                    emd_union, emd_delta, dist_marginal_delta = self.funcion_submodular(
-                        deltas_ciclo[k], omegas_ciclo
-                    )
+                # Paraleliza las llamadas a funcion_submodular
+                with ThreadPoolExecutor() as executor:
+                    resultados = list(executor.map(
+                        lambda k: self.funcion_submodular(deltas_ciclo[k], omegas_ciclo),
+                        range(len(deltas_ciclo))
+                    ))
+
+                for k, (emd_union, emd_delta, dist_marginal_delta) in enumerate(resultados):
                     emd_iteracion = emd_union - emd_delta
 
                     if emd_iteracion < emd_local:
@@ -249,6 +259,7 @@ class QNodes(SIA):
 
                     emd_particion_candidata = emd_delta
                     dist_particion_candidata = dist_marginal_delta
+                    # ...                # self.logger.debug(f"emd_iteracion: {emd_iteracion}")
                     ...
                 # self.logger.critic(f"       [k]: {indice_mip}")
 
