@@ -7,6 +7,8 @@ from src.middlewares.profile import profiler_manager, profile
 from src.funcs.format import fmt_biparte_q
 from src.controllers.manager import Manager
 from src.models.base.sia import SIA
+import multiprocessing
+
 
 from src.models.core.solution import Solution
 from src.constants.models import (
@@ -23,6 +25,68 @@ from src.constants.base import (
     EFECTO,
     ACTUAL,
 )
+
+from src.models.core.system import System  # Ajusta el import según tu estructura
+
+def funcion_submodular_worker(args):
+    (
+        tpm,
+        estado_inicial,
+        notacion,
+        sia_dists_marginales,
+        delta,
+        omegas,
+        EFECTO,
+        ACTUAL,
+        emd_efecto_func
+    ) = args
+
+    subsistema = System(
+        tpm=tpm,
+        estado_inicio=estado_inicial,
+        notacion=notacion
+    )
+
+    temporal = [[], []]
+    if isinstance(delta, tuple):
+        d_tiempo, d_indice = delta
+        temporal[d_tiempo].append(d_indice)
+    else:
+        for d in delta:
+            d_tiempo, d_indice = d
+            temporal[d_tiempo].append(d_indice)
+
+    dims_alcance_delta = temporal[EFECTO]
+    dims_mecanismo_delta = temporal[ACTUAL]
+
+    particion_delta = subsistema.bipartir(
+        np.array(dims_alcance_delta, dtype=np.int8),
+        np.array(dims_mecanismo_delta, dtype=np.int8),
+    )
+    vector_delta_marginal = particion_delta.distribucion_marginal()
+    emd_delta = emd_efecto_func(vector_delta_marginal, sia_dists_marginales)
+
+    # Unión
+    for omega in omegas:
+        if isinstance(omega, list):
+            for omg in omega:
+                o_tiempo, o_indice = omg
+                temporal[o_tiempo].append(o_indice)
+        else:
+            o_tiempo, o_indice = omega
+            temporal[o_tiempo].append(o_indice)
+
+    dims_alcance_union = temporal[EFECTO]
+    dims_mecanismo_union = temporal[ACTUAL]
+
+    particion_union = subsistema.bipartir(
+        np.array(dims_alcance_union, dtype=np.int8),
+        np.array(dims_mecanismo_union, dtype=np.int8),
+    )
+    vector_union_marginal = particion_union.distribucion_marginal()
+    emd_union = emd_efecto_func(vector_union_marginal, sia_dists_marginales)
+
+    return emd_union, emd_delta, vector_delta_marginal
 
 
 class QNodes(SIA):
@@ -164,6 +228,10 @@ class QNodes(SIA):
             particion=fmt_mip,
         )
 
+
+
+    
+    
     def algorithm(self, vertices: list[tuple[int, int]]):
         """
         Implementa el algoritmo Q para encontrar la partición óptima de un sistema que minimiza la pérdida de información, basándose en principios de submodularidad dentro de la teoría de lainformación.
@@ -225,36 +293,46 @@ class QNodes(SIA):
         deltas_ciclo = deltas_origen
 
         total = len(vertices_fase) - 2
-        for i in range(len(vertices_fase) - 2):
-            self.logger.debug(f"total: {total - i}")
-            omegas_ciclo = [vertices_fase[0]]
-            deltas_ciclo = vertices_fase[1:]
 
-            emd_particion_candidata = INFTY_POS
+        # CREA EL POOL UNA SOLA VEZ
+        with multiprocessing.Pool() as pool:
+            for i in range(len(vertices_fase) - 2):
+                self.logger.debug(f"total: {total - i}")
+                omegas_ciclo = [vertices_fase[0]]
+                deltas_ciclo = vertices_fase[1:]
 
-            for j in range(len(deltas_ciclo) - 1):
-                # self.logger.critic(f"   {j=}")
-                emd_local = 1e5
-                indice_mip: int
+                emd_particion_candidata = INFTY_POS
 
-                for k in range(len(deltas_ciclo)):
-                    emd_union, emd_delta, dist_marginal_delta = self.funcion_submodular(
-                        deltas_ciclo[k], omegas_ciclo
-                    )
-                    emd_iteracion = emd_union - emd_delta
+                for j in range(len(deltas_ciclo) - 1):
+                    emd_local = 1e5
+                    indice_mip: int
 
-                    if emd_iteracion < emd_local:
-                        emd_local = emd_iteracion
-                        indice_mip = k
+                    worker_args = [
+                            (
+                                self.sia_subsistema.tpm,
+                                self.sia_subsistema.estado_inicial,
+                                self.sia_subsistema.notacion,
+                                self.sia_dists_marginales,
+                                deltas_ciclo[k],
+                                omegas_ciclo,
+                                EFECTO,
+                                ACTUAL,
+                                emd_efecto
+                            )
+                            for k in range(len(deltas_ciclo))
+                        ]
+                    results = pool.map(funcion_submodular_worker, worker_args)
 
-                    emd_particion_candidata = emd_delta
-                    dist_particion_candidata = dist_marginal_delta
-                    ...
-                # self.logger.critic(f"       [k]: {indice_mip}")
+                    for k, (emd_union, emd_delta, dist_marginal_delta) in enumerate(results):
+                        emd_iteracion = emd_union - emd_delta
+                        if emd_iteracion < emd_local:
+                            emd_local = emd_iteracion
+                            indice_mip = k
+                        emd_particion_candidata = emd_delta
+                        dist_particion_candidata = dist_marginal_delta
 
-                omegas_ciclo.append(deltas_ciclo[indice_mip])
-                deltas_ciclo.pop(indice_mip)
-                ...
+                    omegas_ciclo.append(deltas_ciclo[indice_mip])
+                    deltas_ciclo.pop(indice_mip)
 
             self.memoria_particiones[
                 tuple(

@@ -29,7 +29,9 @@ class System:
     ):
         if estado_inicio.size != (n_nodes := tpm.shape[COLS_IDX]):
             raise ValueError(f"Estado inicial debe tener longitud {n_nodes}")
+        self.tpm = tpm  # 
         self.estado_inicial = estado_inicio
+        self.notacion = notacion
         self.ncubos = tuple(
             NCube(
                 indice=i,
@@ -133,6 +135,8 @@ class System:
             return self
         nuevo_sis = System.__new__(System)
         nuevo_sis.estado_inicial = self.estado_inicial
+        nuevo_sis.tpm = self.tpm
+        nuevo_sis.notacion = self.notacion  
         nuevo_sis.ncubos = tuple(
             cube.condicionar(indices_validos, self.estado_inicial)
             for cube in self.ncubos
@@ -212,6 +216,8 @@ class System:
         valid_futures = np.setdiff1d(self.indices_ncubos, alcance_dims)
         new_sys = System.__new__(System)
         new_sys.estado_inicial = self.estado_inicial
+        new_sys.tpm = self.tpm
+        new_sys.notacion = self.notacion
         new_sys.ncubos = tuple(
             cube.marginalizar(mecanismo_dims)
             for cube in self.ncubos
@@ -236,7 +242,7 @@ class System:
         """
         new_sys = System.__new__(System)
         new_sys.estado_inicial = self.estado_inicial
-
+        new_sys.tpm = self.tpm
         new_sys.ncubos = tuple(
             cube.marginalizar(np.setdiff1d(cube.dims, mecanismo))
             if cube.indice in alcance
