@@ -218,8 +218,8 @@ class Solution:
         -----
             Utiliza la biblioteca colorama para el formato de colores, permitiedo una visualización clara por terminal.
         """
-        bilinea = "═" * 50
-        trilinea = "≡" * 50
+        bilinea = "-" * 50
+        trilinea = "=" * 50
 
         def formatear_distribucion(
             distribucion: np.ndarray,
@@ -231,7 +231,7 @@ class Solution:
                 LIMITE = 64
                 excedente = rango - LIMITE
                 if excedente > 0:
-                    mensaje_desborde = f" {excedente} valores más.."
+                    mensaje_desborde = f" {excedente} valores mas.."
                     rango = LIMITE
 
             datos = " ".join(
@@ -258,21 +258,21 @@ class Solution:
 
 {Fore.RED}{self.estrategia} fue la estrategia de solucion.
 
-{Fore.BLUE}Distancia métrica utilizada:
+{Fore.BLUE}Distancia metrica utilizada:
 {Fore.WHITE}{aplicacion.distancia_metrica}
-{Fore.BLUE}Notación utilizada en indexación:
+{Fore.BLUE}Notacion utilizada en indexacion:
 {Fore.WHITE}{aplicacion.notacion}
 
 {Fore.YELLOW}Distribucion {tipo_distribucion} del Subsistema:
 {Style.RESET_ALL}{formatear_distribucion(self.distribucion_subsistema)}
-{Fore.YELLOW}Distribucion {tipo_distribucion} de la Partición:
+{Fore.YELLOW}Distribucion {tipo_distribucion} de la Particion:
 {Style.RESET_ALL}{formatear_distribucion(self.distribucion_particion)}
 
-{Fore.YELLOW}Mejor Bi-Partición:
+{Fore.YELLOW}Mejor Bi-Particion:
 {Fore.MAGENTA}{self.particion}
-{Fore.GREEN}Perdida mínima ( φ ) = {self.perdida:.4f}
+{Fore.GREEN}Perdida minima ( phi ) = {self.perdida:.4f}
 
-{Fore.BLUE}Tiempos de ejecución:
+{Fore.BLUE}Tiempos de ejecucion:
 {Fore.WHITE}Horas: {tiempo_h} = Minutos: {tiempo_m} = Segundos: {tiempo_s}
 
 {Fore.CYAN}{trilinea}{Style.RESET_ALL}"""
