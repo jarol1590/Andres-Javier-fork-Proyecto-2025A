@@ -189,12 +189,17 @@ class QNodes(SIA):
     ):
         self.sia_preparar_subsistema(condicion, alcance, mecanismo)
 
+        #
+
         futuro = tuple(
             (EFECTO, idx_efecto) for idx_efecto in self.sia_subsistema.indices_ncubos
         )
+        # ( (1,0)=A (1,1)=B (1,2)=C #
+
         presente = tuple(
             (ACTUAL, idx_actual) for idx_actual in self.sia_subsistema.dims_ncubos
-        )
+        )  #
+        # ( (0,0)=a (0,1)=b (0,2)=c #
 
         self.m = self.sia_subsistema.indices_ncubos.size
         self.n = self.sia_subsistema.dims_ncubos.size
@@ -210,11 +215,6 @@ class QNodes(SIA):
         vertices = list(presente + futuro)
         self.vertices = set(presente + futuro)
         mip = self.algorithm(vertices)
-
-        comm = MPI.COMM_WORLD
-        rank = comm.Get_rank()
-        if rank != 0:
-            return  # Solo el proceso root continúa
 
         fmt_mip = fmt_biparte_q(list(mip), self.nodes_complement(mip))
         perdida_mip, dist_marginal_mip = self.memoria_particiones[mip]
@@ -254,84 +254,78 @@ class QNodes(SIA):
                 self.logger.debug(f"total: {total - i}")
                 omegas_ciclo = [vertices_fase[0]]
                 deltas_ciclo = vertices_fase[1:]
+
+                emd_particion_candidata = INFTY_POS
+
+                # Prepara los argumentos para cada proceso
+                args_list = [
+                    (
+                        deltas_ciclo[k],
+                        omegas_ciclo,
+                        self.sia_subsistema.tpm,
+                        self.sia_subsistema.estado_inicial,
+                        self.sia_dists_marginales
+                    )
+                    for k in range(len(deltas_ciclo))
+                ]
+
+                # Divide el trabajo entre procesos
+                chunks = chunk_list(args_list, size)
             else:
-                omegas_ciclo = None
-                deltas_ciclo = None
+                chunks = None
 
-            omegas_ciclo = comm.bcast(omegas_ciclo, root=0)
-            deltas_ciclo = comm.bcast(deltas_ciclo, root=0)
+            # Distribuye los chunks a cada proceso
+            my_chunk = comm.scatter(chunks, root=0)
 
-            # --- Ciclo interno: ir agregando deltas a omega ---
-            for j in range(len(deltas_ciclo) - 1):
-                if rank == 0:
-                    args_list = [
-                        (
-                            deltas_ciclo[k],
-                            omegas_ciclo,
-                            self.sia_subsistema.tpm,
-                            self.sia_subsistema.estado_inicial,
-                            self.sia_dists_marginales
-                        )
-                        for k in range(len(deltas_ciclo))
-                    ]
-                    chunks = chunk_list(args_list, size)
+            # Cada proceso ejecuta su parte
+            my_results = [funcion_submodular_serializable(args) for args in my_chunk]
+
+            # Recolecta los resultados en el proceso 0
+            all_results = comm.gather(my_results, root=0)
+
+            if rank == 0:
+                # Junta todos los resultados
+                resultados = [item for sublist in all_results for item in sublist]
+
+                emd_local = 1e5
+                indice_mip = None
+
+                for k, (emd_union, emd_delta, dist_marginal_delta) in enumerate(resultados):
+                    emd_iteracion = emd_union - emd_delta
+                    if emd_iteracion < emd_local:
+                        emd_local = emd_iteracion
+                        indice_mip = k
+                    emd_particion_candidata = emd_delta
+                    dist_particion_candidata = dist_marginal_delta
+
+                # Guarda en memoria_particiones solo si deltas_ciclo no está vacío
+                if len(deltas_ciclo) > 0:
+                    
+                    clave = (
+                        deltas_ciclo[LAST_IDX]
+                        if isinstance(deltas_ciclo[LAST_IDX], list)
+                        else deltas_ciclo
+                    )
+                    self.memoria_particiones[tuple(clave)] = emd_particion_candidata, dist_particion_candidata
+
+                    par_candidato = (
+                        [omegas_ciclo[LAST_IDX]]
+                        if isinstance(omegas_ciclo[LAST_IDX], tuple)
+                        else omegas_ciclo[LAST_IDX]
+                    ) + (
+                        deltas_ciclo[LAST_IDX]
+                        if isinstance(deltas_ciclo[LAST_IDX], list)
+                        else deltas_ciclo
+                    )
+
+                    omegas_ciclo.pop()
+                    omegas_ciclo.append(par_candidato)
+                    vertices_fase = omegas_ciclo
                 else:
-                    chunks = None
-
-                my_chunk = comm.scatter(chunks, root=0)
-                my_results = [funcion_submodular_serializable(args) for args in my_chunk]
-                all_results = comm.gather(my_results, root=0)
-
-                if rank == 0:
-                    resultados = [item for sublist in all_results for item in sublist]
-                    emd_local = 1e5
-                    indice_mip = None
-                    for k, (emd_union, emd_delta, dist_marginal_delta) in enumerate(resultados):
-                        emd_iteracion = emd_union - emd_delta
-                        if emd_iteracion < emd_local:
-                            emd_local = emd_iteracion
-                            indice_mip = k
-                        emd_particion_candidata = emd_delta
-                        dist_particion_candidata = dist_marginal_delta
-
-                    omegas_ciclo = omegas_ciclo + [deltas_ciclo[indice_mip]]
-                    deltas_ciclo = list(deltas_ciclo)
-                    deltas_ciclo.pop(indice_mip)
-
+                    break  # Termina el ciclo si deltas_ciclo está vacío
                 omegas_ciclo = comm.bcast(omegas_ciclo, root=0)
                 deltas_ciclo = comm.bcast(deltas_ciclo, root=0)
-
-            # --- Fin del ciclo interno, guardar partición ---
-            if rank == 0:
-                clave = (
-                    deltas_ciclo[LAST_IDX]
-                    if isinstance(deltas_ciclo[LAST_IDX], list)
-                    else deltas_ciclo
-                )
-                self.memoria_particiones[tuple(clave)] = emd_particion_candidata, dist_particion_candidata
-
-                par_candidato = (
-                    [omegas_ciclo[LAST_IDX]]
-                    if isinstance(omegas_ciclo[LAST_IDX], tuple)
-                    else omegas_ciclo[LAST_IDX]
-                ) + (
-                    deltas_ciclo[LAST_IDX]
-                    if isinstance(deltas_ciclo[LAST_IDX], list)
-                    else deltas_ciclo
-                )
-
-                omegas_ciclo.pop()
-                omegas_ciclo.append(par_candidato)
-                vertices_fase = omegas_ciclo
-            else:
-                vertices_fase = None
-                omegas_ciclo = None
-                deltas_ciclo = None
-
-            omegas_ciclo = comm.bcast(omegas_ciclo, root=0)
-            deltas_ciclo = comm.bcast(deltas_ciclo, root=0)
-            vertices_fase = comm.bcast(vertices_fase, root=0)
-
+                vertices_fase = comm.bcast(vertices_fase, root=0)
         # Solo el proceso 0 retorna el resultado final
         if rank == 0:
             return min(

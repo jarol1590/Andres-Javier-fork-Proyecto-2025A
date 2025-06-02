@@ -31,6 +31,7 @@ class System:
     ):
         if estado_inicio.size != (n_nodes := tpm.shape[COLS_IDX]):
             raise ValueError(f"Estado inicial debe tener longitud {n_nodes}")
+        self.tpm = tpm 
         self.estado_inicial = estado_inicio
         self.ncubos = tuple(
             NCube(
@@ -44,8 +45,6 @@ class System:
         )
         
         #para conocer el tamaño de los n-cubos
-        for cube in self.ncubos:
-            print(f"NCube {cube.indice}: {cube.data.nbytes / 1024:.2f} KB")
 
     @property
     def indices_ncubos(self):
@@ -139,6 +138,8 @@ class System:
             return self
         nuevo_sis = System.__new__(System)
         nuevo_sis.estado_inicial = self.estado_inicial
+        #agregada la tpm a nuevo sistema
+        nuevo_sis.tpm = self.tpm
         nuevo_sis.ncubos = tuple(
             cube.condicionar(indices_validos, self.estado_inicial)
             for cube in self.ncubos
@@ -218,6 +219,9 @@ class System:
         valid_futures = np.setdiff1d(self.indices_ncubos, alcance_dims)
         new_sys = System.__new__(System)
         new_sys.estado_inicial = self.estado_inicial
+        #agregada la tpm a nuevo sistema
+        
+        new_sys.tpm = self.tpm 
         new_sys.ncubos = tuple(
             cube.marginalizar(mecanismo_dims)
             for cube in self.ncubos
@@ -240,9 +244,12 @@ class System:
         Returns:
             System: Se retorna una bipartición, acá es importante tener muy claro que puede o no haber pérdida con respecto al sub-sistema original y por ende, se analizará mediante una distancia métrica cono la EMD-Effect la diferencia entre las distribuciones marginales de estos dos "sistemas", apreciando si hay diferencia como una "pérdida" en la información respecto al sub-sistema original.
         """
+        #print("bipartiendo algo")
         new_sys = System.__new__(System)
         new_sys.estado_inicial = self.estado_inicial
-
+        #agregada la tpm a nuevo sistema
+        
+        new_sys.tpm = self.tpm 
         new_sys.ncubos = tuple(
             cube.marginalizar(np.setdiff1d(cube.dims, mecanismo))
             if cube.indice in alcance

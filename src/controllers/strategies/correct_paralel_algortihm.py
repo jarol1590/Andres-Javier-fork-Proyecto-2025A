@@ -211,10 +211,11 @@ class QNodes(SIA):
         self.vertices = set(presente + futuro)
         mip = self.algorithm(vertices)
 
+        # --- Solo el proceso 0 continúa ---
         comm = MPI.COMM_WORLD
         rank = comm.Get_rank()
         if rank != 0:
-            return  # Solo el proceso root continúa
+            return  # Los procesos que no son root terminan aquí
 
         fmt_mip = fmt_biparte_q(list(mip), self.nodes_complement(mip))
         perdida_mip, dist_marginal_mip = self.memoria_particiones[mip]

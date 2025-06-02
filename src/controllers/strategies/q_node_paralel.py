@@ -13,7 +13,6 @@ from src.funcs.base import emd_efecto
 
 from concurrent.futures import ProcessPoolExecutor
 from concurrent.futures import ThreadPoolExecutor
-from mpi4py import MPI
 
 import threading
 import time
@@ -189,12 +188,17 @@ class QNodes(SIA):
     ):
         self.sia_preparar_subsistema(condicion, alcance, mecanismo)
 
+        #
+
         futuro = tuple(
             (EFECTO, idx_efecto) for idx_efecto in self.sia_subsistema.indices_ncubos
         )
+        # ( (1,0)=A (1,1)=B (1,2)=C #
+
         presente = tuple(
             (ACTUAL, idx_actual) for idx_actual in self.sia_subsistema.dims_ncubos
-        )
+        )  #
+        # ( (0,0)=a (0,1)=b (0,2)=c #
 
         self.m = self.sia_subsistema.indices_ncubos.size
         self.n = self.sia_subsistema.dims_ncubos.size
@@ -211,11 +215,6 @@ class QNodes(SIA):
         self.vertices = set(presente + futuro)
         mip = self.algorithm(vertices)
 
-        comm = MPI.COMM_WORLD
-        rank = comm.Get_rank()
-        if rank != 0:
-            return  # Solo el proceso root continúa
-
         fmt_mip = fmt_biparte_q(list(mip), self.nodes_complement(mip))
         perdida_mip, dist_marginal_mip = self.memoria_particiones[mip]
 
@@ -228,20 +227,10 @@ class QNodes(SIA):
             particion=fmt_mip,
         )
 
-
-
     def algorithm(self, vertices: list[tuple[int, int]]):
-        def chunk_list(lst, n):
-            """Divide lst en n partes lo más iguales posible."""
-            k, m = divmod(len(lst), n)
-            return [lst[i*k + min(i, m):(i+1)*k + min(i+1, m)] for i in range(n)]
-
-        comm = MPI.COMM_WORLD
-        rank = comm.Get_rank()
-        size = comm.Get_size()
-
         omegas_origen = np.array([vertices[0]])
         deltas_origen = np.array(vertices[1:])
+
         vertices_fase = vertices
 
         omegas_ciclo = omegas_origen
@@ -249,21 +238,19 @@ class QNodes(SIA):
 
         total = len(vertices_fase) - 2
 
-        for i in range(len(vertices_fase) - 2):
-            if rank == 0:
+        
+        with ProcessPoolExecutor() as executor:
+            for i in range(len(vertices_fase) - 2):
                 self.logger.debug(f"total: {total - i}")
                 omegas_ciclo = [vertices_fase[0]]
                 deltas_ciclo = vertices_fase[1:]
-            else:
-                omegas_ciclo = None
-                deltas_ciclo = None
 
-            omegas_ciclo = comm.bcast(omegas_ciclo, root=0)
-            deltas_ciclo = comm.bcast(deltas_ciclo, root=0)
+                emd_particion_candidata = INFTY_POS
 
-            # --- Ciclo interno: ir agregando deltas a omega ---
-            for j in range(len(deltas_ciclo) - 1):
-                if rank == 0:
+                for j in range(len(deltas_ciclo) - 1):
+                    emd_local = 1e5
+                    indice_mip: int
+
                     args_list = [
                         (
                             deltas_ciclo[k],
@@ -274,71 +261,49 @@ class QNodes(SIA):
                         )
                         for k in range(len(deltas_ciclo))
                     ]
-                    chunks = chunk_list(args_list, size)
-                else:
-                    chunks = None
 
-                my_chunk = comm.scatter(chunks, root=0)
-                my_results = [funcion_submodular_serializable(args) for args in my_chunk]
-                all_results = comm.gather(my_results, root=0)
+                    resultados = list(executor.map(funcion_submodular_serializable, args_list))
 
-                if rank == 0:
-                    resultados = [item for sublist in all_results for item in sublist]
-                    emd_local = 1e5
-                    indice_mip = None
                     for k, (emd_union, emd_delta, dist_marginal_delta) in enumerate(resultados):
                         emd_iteracion = emd_union - emd_delta
+
                         if emd_iteracion < emd_local:
                             emd_local = emd_iteracion
                             indice_mip = k
+
                         emd_particion_candidata = emd_delta
                         dist_particion_candidata = dist_marginal_delta
 
-                    omegas_ciclo = omegas_ciclo + [deltas_ciclo[indice_mip]]
-                    deltas_ciclo = list(deltas_ciclo)
-                    deltas_ciclo.pop(indice_mip)
+                # Guarda en memoria_particiones solo si deltas_ciclo no está vacío
+                if len(deltas_ciclo) > 0:
+                    clave = (
+                        deltas_ciclo[LAST_IDX]
+                        if isinstance(deltas_ciclo[LAST_IDX], list)
+                        else deltas_ciclo
+                    )
+                    self.memoria_particiones[tuple(clave)] = emd_particion_candidata, dist_particion_candidata
 
-                omegas_ciclo = comm.bcast(omegas_ciclo, root=0)
-                deltas_ciclo = comm.bcast(deltas_ciclo, root=0)
+                    par_candidato = (
+                        [omegas_ciclo[LAST_IDX]]
+                        if isinstance(omegas_ciclo[LAST_IDX], tuple)
+                        else omegas_ciclo[LAST_IDX]
+                    ) + (
+                        deltas_ciclo[LAST_IDX]
+                        if isinstance(deltas_ciclo[LAST_IDX], list)
+                        else deltas_ciclo
+                    )
 
-            # --- Fin del ciclo interno, guardar partición ---
-            if rank == 0:
-                clave = (
-                    deltas_ciclo[LAST_IDX]
-                    if isinstance(deltas_ciclo[LAST_IDX], list)
-                    else deltas_ciclo
-                )
-                self.memoria_particiones[tuple(clave)] = emd_particion_candidata, dist_particion_candidata
+                    omegas_ciclo.pop()
+                    omegas_ciclo.append(par_candidato)
+                    vertices_fase = omegas_ciclo
+                    # ...otros pasos del ciclo...
+                else:
+                    break  # Termina el ciclo si deltas_ciclo está vacío
 
-                par_candidato = (
-                    [omegas_ciclo[LAST_IDX]]
-                    if isinstance(omegas_ciclo[LAST_IDX], tuple)
-                    else omegas_ciclo[LAST_IDX]
-                ) + (
-                    deltas_ciclo[LAST_IDX]
-                    if isinstance(deltas_ciclo[LAST_IDX], list)
-                    else deltas_ciclo
-                )
+        return min(
+            self.memoria_particiones, key=lambda k: self.memoria_particiones[k][0]
+        )
 
-                omegas_ciclo.pop()
-                omegas_ciclo.append(par_candidato)
-                vertices_fase = omegas_ciclo
-            else:
-                vertices_fase = None
-                omegas_ciclo = None
-                deltas_ciclo = None
-
-            omegas_ciclo = comm.bcast(omegas_ciclo, root=0)
-            deltas_ciclo = comm.bcast(deltas_ciclo, root=0)
-            vertices_fase = comm.bcast(vertices_fase, root=0)
-
-        # Solo el proceso 0 retorna el resultado final
-        if rank == 0:
-            return min(
-                self.memoria_particiones, key=lambda k: self.memoria_particiones[k][0]
-            )
-        else:
-            return None
     def funcion_submodular(
         self, deltas: Union[tuple, list[tuple]], omegas: list[Union[tuple, list[tuple]]]
     ):
