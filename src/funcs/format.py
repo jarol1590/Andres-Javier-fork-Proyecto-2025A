@@ -1,5 +1,5 @@
 from src.funcs.base import ABECEDARY, LOWER_ABECEDARY
-from src.constants.base import VOID_STR
+#from src.constants.base import "0"
 
 
 def fmt_biparticion(
@@ -11,18 +11,18 @@ def fmt_biparticion(
     mech_d, purv_d = parte_dos
 
     # Convertir índices a letras o símbolo vacío si no hay elementos
-    purv_prim = ",".join(ABECEDARY[j] for j in pur_p) if pur_p else VOID_STR
-    mech_prim = ",".join(LOWER_ABECEDARY[i] for i in mech_p) if mech_p else VOID_STR
+    purv_prim = ",".join(ABECEDARY[j] for j in pur_p) if pur_p else "0"
+    mech_prim = ",".join(LOWER_ABECEDARY[i] for i in mech_p) if mech_p else "0"
 
-    purv_dual = ",".join(ABECEDARY[i] for i in purv_d) if purv_d else VOID_STR
-    mech_dual = ",".join(LOWER_ABECEDARY[j] for j in mech_d) if mech_d else VOID_STR
+    purv_dual = ",".join(ABECEDARY[i] for i in purv_d) if purv_d else "0"
+    mech_dual = ",".join(LOWER_ABECEDARY[j] for j in mech_d) if mech_d else "0"
 
     width_prim = max(len(purv_prim), len(mech_prim)) + 2
     width_dual = max(len(purv_dual), len(mech_dual)) + 2
 
     return (
-        f"⎛{purv_prim:^{width_prim}}⎞⎛{purv_dual:^{width_dual}}⎞\n"
-        f"⎝{mech_prim:^{width_prim}}⎠⎝{mech_dual:^{width_dual}}⎠\n"
+        f"|{purv_prim:^{width_prim}}||{purv_dual:^{width_dual}}|\n"
+        f"|{mech_prim:^{width_prim}}||{mech_dual:^{width_dual}}|\n"
     )
 
 
@@ -46,8 +46,8 @@ def fmt_parte_q(parte: list[tuple[int, int]], to_sort: bool = True) -> tuple[str
     for time, idx in parte:
         purv.append(ABECEDARY[idx]) if time else mech.append(LOWER_ABECEDARY[idx])
 
-    str_purv = ",".join(purv) if purv else VOID_STR
-    str_mech = ",".join(mech) if mech else VOID_STR
+    str_purv = ",".join(purv) if purv else "0"
+    str_mech = ",".join(mech) if mech else "0"
     width = max(len(str_purv), len(str_mech)) + 2
 
-    return f"⎛{str_purv:^{width}}⎞", f"⎝{str_mech:^{width}}⎠"
+    return f"|{str_purv:^{width}}|", f"|{str_mech:^{width}}|"

@@ -6,11 +6,11 @@ from src.controllers.strategies.q_nodes_parallel import QNodesParallel
 
 def iniciar():
     """Punto de entrada principal"""
-                    # ABCD #
-    estado_inicial = "1000000000"
-    condiciones =    "1111111111"
-    alcance =        "1111111111"
-    mecanismo =      "1111111111"
+                    # ABCD #111111111111111
+    estado_inicial = "000000000000000" #15 bits
+    condiciones =    "111111111111111"
+    alcance =        "111111111111111"
+    mecanismo =      "111111111111111"
 
     gestor_sistema = Manager(estado_inicial)
 
