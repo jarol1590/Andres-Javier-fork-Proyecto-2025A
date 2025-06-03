@@ -286,19 +286,15 @@ class System:
         )
         return new_sys
     
-    def bipartir_Parallel(
-        self,
-        alcance: NDArray[np.int8],
-        mecanismo: NDArray[np.int8],
-    ) -> "System":
+    def bipartir_parallel(self, alcance: NDArray[np.int8], mecanismo: NDArray[np.int8]) -> "System":
+        n_cores = os.cpu_count() or 4
+        args = [(cube, alcance, mecanismo) for cube in self.ncubos]
+        with ProcessPoolExecutor(max_workers=n_cores) as executor:
+            ncubos_result = list(executor.map(self._bipartir_worker, args))
         new_sys = System.__new__(System)
         new_sys.estado_inicial = self.estado_inicial
-
-        with concurrent.futures.ThreadPoolExecutor() as executor:
-            new_sys.ncubos = tuple(executor.map(
-                self._bipartir_worker,
-                [(cube, alcance, mecanismo) for cube in self.ncubos]
-            ))
+        new_sys.tpm = self.tpm
+        new_sys.ncubos = tuple(ncubos_result)
         return new_sys
     
     def bipartir_lotes(self, alcance, mecanismo, pool=None, tam_lote=10):
@@ -328,6 +324,8 @@ class System:
             sub_estado_inicial = tuple(estado_inicial[j] for j in ncubo.dims)
             probabilidad = ncubo.data[seleccionar_subestado(sub_estado_inicial)]
         return 1 - probabilidad
+    
+    
     @staticmethod
     def _marginalizar_lote(args):
         cubos_lote, estado_inicial = args
@@ -356,15 +354,11 @@ class System:
         return np.array([item for sublist in resultados for item in sublist], dtype=np.float32)
     
     
-    def distribucion_marginal_parallel(self):
-        """
-        Versión paralela de distribucion_marginal.
-        """
-        with ProcessPoolExecutor() as executor:
-            resultados = list(executor.map(
-                System._marginal_worker,
-                [(ncubo, self.estado_inicial) for ncubo in self.ncubos]
-            ))
+    def distribucion_marginal_parallel(self) -> np.ndarray:
+        n_cores = os.cpu_count() or 4
+        args = [(ncubo, self.estado_inicial) for ncubo in self.ncubos]
+        with ProcessPoolExecutor(max_workers=n_cores) as executor:
+            resultados = list(executor.map(System._marginal_worker, args))
         return np.array(resultados, dtype=np.float32)
     
     def distribucion_marginal(self):

@@ -4,6 +4,7 @@ from typing import Union, List, Tuple
 import time
 import copy
 import concurrent.futures
+import os
 from concurrent.futures import ProcessPoolExecutor
 from src.middlewares.slogger import SafeLogger
 from src.funcs.base import emd_efecto, ABECEDARY
@@ -27,6 +28,56 @@ from src.constants.base import (
     EFECTO,
     ACTUAL,
 )
+
+def worker_funcion_submodular2(args):
+    deltas, omegas, sia_subsistema, sia_dists_marginales = args
+
+    emd_delta = INFTY_NEG
+    temporal = [[], []]
+
+    # Fase individual
+    if isinstance(deltas, tuple):
+        d_tiempo, d_indice = deltas
+        temporal[d_tiempo].append(d_indice)
+    else:
+        for delta in deltas:
+            d_tiempo, d_indice = delta
+            temporal[d_tiempo].append(d_indice)
+
+    copia_delta = copy.deepcopy(sia_subsistema)
+    dims_alcance_delta = temporal[EFECTO]
+    dims_mecanismo_delta = temporal[ACTUAL]
+
+    particion_delta = copia_delta.bipartir(
+        np.array(dims_alcance_delta, dtype=np.int8),
+        np.array(dims_mecanismo_delta, dtype=np.int8)
+    )
+    vector_delta_marginal = particion_delta.distribucion_marginal()
+    emd_delta = emd_efecto(vector_delta_marginal, sia_dists_marginales)
+
+    # Fase unión
+    for omega in omegas:
+        if isinstance(omega, list):
+            for omg in omega:
+                o_tiempo, o_indice = omg
+                temporal[o_tiempo].append(o_indice)
+        else:
+            o_tiempo, o_indice = omega
+            temporal[o_tiempo].append(o_indice)
+
+    copia_union = copy.deepcopy(sia_subsistema)
+    dims_alcance_union = temporal[EFECTO]
+    dims_mecanismo_union = temporal[ACTUAL]
+
+    particion_union = copia_union.bipartir(
+        np.array(dims_alcance_union, dtype=np.int8),
+        np.array(dims_mecanismo_union, dtype=np.int8)
+    )
+    vector_union_marginal = particion_union.distribucion_marginal()
+    emd_union = emd_efecto(vector_union_marginal, sia_dists_marginales)
+
+    return emd_union, emd_delta, vector_delta_marginal
+
 
 class QNodesParallel(SIA):
     """
@@ -154,73 +205,69 @@ class QNodesParallel(SIA):
         deltas_ciclo = deltas_origen
 
         total = len(vertices_fase) - 2
-        for i in range(len(vertices_fase) - 2):
-            self.logger.debug(f"total: {total - i}")
-            omegas_ciclo = [vertices_fase[0]]
-            deltas_ciclo = vertices_fase[1:]
+        n_cores = os.cpu_count() or 4
+        tam_lote = max(1, len(deltas_ciclo) // n_cores)
 
-            emd_particion_candidata = INFTY_POS
+        with ProcessPoolExecutor(max_workers=n_cores) as pool:
+            for i in range(len(vertices_fase) - 2):
+                self.logger.debug(f"total: {total - i}")
+                omegas_ciclo = [vertices_fase[0]]
+                deltas_ciclo = vertices_fase[1:]
 
-            for j in range(len(deltas_ciclo) - 1):
-                # self.logger.critic(f"   {j=}")
-                emd_local = 1e5
-                indice_mip: int
+                emd_particion_candidata = INFTY_POS
 
-                with concurrent.futures.ThreadPoolExecutor() as executor:
-                    resultados = list(executor.map(
-                        lambda k: self.funcion_submodular(deltas_ciclo[k], omegas_ciclo),
-                        range(len(deltas_ciclo))
-                    ))
+                for j in range(len(deltas_ciclo) - 1):
+                    emd_local = 1e5
+                    indice_mip = None
 
-                emd_local = 1e5
-                indice_mip = None
+                    # Usar pool y funcion_submodular2
+                    args_list = [
+                        (deltas_ciclo[k], omegas_ciclo, copy.deepcopy(self.sia_subsistema), self.sia_dists_marginales)
+                        for k in range(len(deltas_ciclo))
+                    ]
+                    resultados = list(pool.map(worker_funcion_submodular2, args_list))
 
-                for k, (emd_union, emd_delta, dist_marginal_delta) in enumerate(resultados):
-                    emd_iteracion = emd_union - emd_delta
+                    for k, (emd_union, emd_delta, dist_marginal_delta) in enumerate(resultados):
+                        emd_iteracion = emd_union - emd_delta
 
-                    if emd_iteracion < emd_local:
-                        emd_local = emd_iteracion
-                        indice_mip = k
+                        if emd_iteracion < emd_local:
+                            emd_local = emd_iteracion
+                            indice_mip = k
 
-                    emd_particion_candidata = emd_delta
-                    dist_particion_candidata = dist_marginal_delta
-                    ...
-                # self.logger.critic(f"       [k]: {indice_mip}")
+                        emd_particion_candidata = emd_delta
+                        dist_particion_candidata = dist_marginal_delta
 
-                omegas_ciclo.append(deltas_ciclo[indice_mip])
-                deltas_ciclo.pop(indice_mip)
-                ...
+                    omegas_ciclo.append(deltas_ciclo[indice_mip])
+                    deltas_ciclo.pop(indice_mip)
 
-            self.memoria_particiones[
-                tuple(
+                self.memoria_particiones[
+                    tuple(
+                        deltas_ciclo[LAST_IDX]
+                        if isinstance(deltas_ciclo[LAST_IDX], list)
+                        else deltas_ciclo
+                    )
+                ] = emd_particion_candidata, dist_particion_candidata
+
+                par_candidato = (
+                    [omegas_ciclo[LAST_IDX]]
+                    if isinstance(omegas_ciclo[LAST_IDX], tuple)
+                    else omegas_ciclo[LAST_IDX]
+                ) + (
                     deltas_ciclo[LAST_IDX]
                     if isinstance(deltas_ciclo[LAST_IDX], list)
                     else deltas_ciclo
                 )
-            ] = emd_particion_candidata, dist_particion_candidata
 
-            par_candidato = (
-                [omegas_ciclo[LAST_IDX]]
-                if isinstance(omegas_ciclo[LAST_IDX], tuple)
-                else omegas_ciclo[LAST_IDX]
-            ) + (
-                deltas_ciclo[LAST_IDX]
-                if isinstance(deltas_ciclo[LAST_IDX], list)
-                else deltas_ciclo
-            )
-
-            omegas_ciclo.pop()
-            omegas_ciclo.append(par_candidato)
-
-            vertices_fase = omegas_ciclo
-            ...
+                omegas_ciclo.pop()
+                omegas_ciclo.append(par_candidato)
+                vertices_fase = omegas_ciclo
 
         return min(
             self.memoria_particiones, key=lambda k: self.memoria_particiones[k][0]
         )
 
     
-    def funcion_submodular2(
+    def funcion_submodular(
         self, deltas: Union[tuple, list[tuple]], omegas: list[Union[tuple, list[tuple]]]
     ):
         """
@@ -275,11 +322,11 @@ class QNodesParallel(SIA):
         dims_alcance_delta = temporal[EFECTO]
         dims_mecanismo_delta = temporal[ACTUAL]
 
-        particion_delta = copia_delta.bipartir_lotes(
+        particion_delta = copia_delta.bipartir_parallel(
             np.array(dims_alcance_delta, dtype=np.int8),
             np.array(dims_mecanismo_delta, dtype=np.int8),
         )
-        vector_delta_marginal = particion_delta.distribucion_marginal_lotes()
+        vector_delta_marginal = particion_delta.distribucion_marginal_parallel()
         emd_delta = emd_efecto(vector_delta_marginal, self.sia_dists_marginales)
 
         # Unión #
@@ -298,16 +345,20 @@ class QNodesParallel(SIA):
         dims_alcance_union = temporal[EFECTO]
         dims_mecanismo_union = temporal[ACTUAL]
 
-        particion_union = copia_union.bipartir_lotes(
+        particion_union = copia_union.bipartir_parallel(
             np.array(dims_alcance_union, dtype=np.int8),
             np.array(dims_mecanismo_union, dtype=np.int8),
         )
-        vector_union_marginal = particion_union.distribucion_marginal_lotes()
+        vector_union_marginal = particion_union.distribucion_marginal_parallel()
         emd_union = emd_efecto(vector_union_marginal, self.sia_dists_marginales)
  
         return emd_union, emd_delta, vector_delta_marginal
 
-    def funcion_submodular(
+    
+   
+    
+    
+    def funcion_submodular2(
         self,
         deltas: Union[tuple, list[tuple]],
         omegas: list[Union[tuple, list[tuple]]],
@@ -366,13 +417,13 @@ class QNodesParallel(SIA):
         dims_alcance_delta = temporal[EFECTO]
         dims_mecanismo_delta = temporal[ACTUAL]
 
-        particion_delta = copia_delta.bipartir_lotes(
+        particion_delta = copia_delta.bipartir_parallel(
             np.array(dims_alcance_delta, dtype=np.int8),
             np.array(dims_mecanismo_delta, dtype=np.int8),
             pool=pool,
             tam_lote=tam_lote
         )
-        vector_delta_marginal = particion_delta.distribucion_marginal_lotes(pool=pool, tam_lote=tam_lote)
+        vector_delta_marginal = particion_delta.distribucion_marginal_parallel(pool=pool, tam_lote=tam_lote)
         emd_delta = emd_efecto(vector_delta_marginal, self.sia_dists_marginales)
 
         # Unión #

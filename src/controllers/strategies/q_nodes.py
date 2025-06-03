@@ -101,14 +101,6 @@ class QNodes(SIA):
         
     
     def algorithm(self, vertices: list[tuple[int, int]]):
-        comm = MPI.COMM_WORLD
-        rank = comm.Get_rank()
-        size = comm.Get_size()
-
-        omegas_origen = [vertices[0]]
-        deltas_origen = list(vertices[1:])
-        vertices_fase = list(vertices)
-
         """
         Implementa el algoritmo Q para encontrar la partición óptima de un sistema que minimiza la pérdida de información, basándose en principios de submodularidad dentro de la teoría de lainformación.
 
@@ -160,9 +152,16 @@ class QNodes(SIA):
         Returns:
             tuple[float, tuple[tuple[int, int], ...]]: El valor de pérdida en la primera posición, asociado con la partición óptima encontrada, identificada por la clave en partition_memory que produce la menor EMD.
         """
-        omegas_origen = np.array([vertices[0]])
-        deltas_origen = np.array(vertices[1:])
-        vertices_fase = vertices
+        
+        
+        comm = MPI.COMM_WORLD
+        rank = comm.Get_rank()
+        size = comm.Get_size()
+
+        omegas_origen = [vertices[0]]
+        deltas_origen = list(vertices[1:])
+        vertices_fase = list(vertices)
+
 
         omegas_ciclo = omegas_origen
         deltas_ciclo = deltas_origen
@@ -241,15 +240,7 @@ class QNodes(SIA):
             )
         else:
             return None
-            omegas_ciclo.pop()
-            omegas_ciclo.append(par_candidato)
-
-            vertices_fase = omegas_ciclo
-            ...
-
-        return min(
-            self.memoria_particiones, key=lambda k: self.memoria_particiones[k][0]
-        )
+            
         
     
     def funcion_submodular(
