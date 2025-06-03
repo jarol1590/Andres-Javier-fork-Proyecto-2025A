@@ -7,17 +7,7 @@ from src.middlewares.profile import profiler_manager, profile
 from src.funcs.format import fmt_biparte_q
 from src.controllers.manager import Manager
 from src.models.base.sia import SIA
-
-from src.models.core.system import System
-from src.funcs.base import emd_efecto
-
-from concurrent.futures import ProcessPoolExecutor
-from concurrent.futures import ThreadPoolExecutor
 from mpi4py import MPI
-
-import threading
-import time
-
 from src.models.core.solution import Solution
 from src.constants.models import (
     QNODES_ANALYSIS_TAG,
@@ -33,60 +23,6 @@ from src.constants.base import (
     EFECTO,
     ACTUAL,
 )
-
-
-
-#funcion submodular para aplicarla en multiprocesing
-def funcion_submodular_serializable(args):
-    deltas, omegas, tpm, estado_inicial, dists_marginales = args
-    INFTY_NEG = float('-inf')
-    EFECTO = 1
-    ACTUAL = 0
-
-    emd_delta = INFTY_NEG
-    temporal = [[], []]
-
-    if isinstance(deltas, tuple):
-        d_tiempo, d_indice = deltas
-        temporal[d_tiempo].append(d_indice)
-    else:
-        for delta in deltas:
-            d_tiempo, d_indice = delta
-            temporal[d_tiempo].append(d_indice)
-
-    copia_delta = System(tpm, estado_inicial)
-    dims_alcance_delta = temporal[EFECTO]
-    dims_mecanismo_delta = temporal[ACTUAL]
-
-    particion_delta = copia_delta.bipartir(
-        np.array(dims_alcance_delta, dtype=np.int8),
-        np.array(dims_mecanismo_delta, dtype=np.int8),
-    )
-    vector_delta_marginal = particion_delta.distribucion_marginal()
-    emd_delta = emd_efecto(vector_delta_marginal, dists_marginales)
-
-    # Unión #
-    for omega in omegas:
-        if isinstance(omega, list):
-            for omg in omega:
-                o_tiempo, o_indice = omg
-                temporal[o_tiempo].append(o_indice)
-        else:
-            o_tiempo, o_indice = omega
-            temporal[o_tiempo].append(o_indice)
-
-    copia_union = System(tpm, estado_inicial)
-    dims_alcance_union = temporal[EFECTO]
-    dims_mecanismo_union = temporal[ACTUAL]
-
-    particion_union = copia_union.bipartir(
-        np.array(dims_alcance_union, dtype=np.int8),
-        np.array(dims_mecanismo_union, dtype=np.int8),
-    )
-    vector_union_marginal = particion_union.distribucion_marginal()
-    emd_union = emd_efecto(vector_union_marginal, dists_marginales)
-
-    return emd_union, emd_delta, vector_delta_marginal
 
 
 class QNodes(SIA):
@@ -189,12 +125,17 @@ class QNodes(SIA):
     ):
         self.sia_preparar_subsistema(condicion, alcance, mecanismo)
 
+        #
+
         futuro = tuple(
             (EFECTO, idx_efecto) for idx_efecto in self.sia_subsistema.indices_ncubos
         )
+        # ( (1,0)=A (1,1)=B (1,2)=C #
+
         presente = tuple(
             (ACTUAL, idx_actual) for idx_actual in self.sia_subsistema.dims_ncubos
-        )
+        )  #
+        # ( (0,0)=a (0,1)=b (0,2)=c #
 
         self.m = self.sia_subsistema.indices_ncubos.size
         self.n = self.sia_subsistema.dims_ncubos.size
@@ -211,11 +152,6 @@ class QNodes(SIA):
         self.vertices = set(presente + futuro)
         mip = self.algorithm(vertices)
 
-        comm = MPI.COMM_WORLD
-        rank = comm.Get_rank()
-        if rank != 0:
-            return  # Solo el proceso root continúa
-
         fmt_mip = fmt_biparte_q(list(mip), self.nodes_complement(mip))
         perdida_mip, dist_marginal_mip = self.memoria_particiones[mip]
 
@@ -228,63 +164,43 @@ class QNodes(SIA):
             particion=fmt_mip,
         )
 
-
-
     def algorithm(self, vertices: list[tuple[int, int]]):
-        def chunk_list(lst, n):
-            """Divide lst en n partes lo más iguales posible."""
-            k, m = divmod(len(lst), n)
-            return [lst[i*k + min(i, m):(i+1)*k + min(i+1, m)] for i in range(n)]
-
         comm = MPI.COMM_WORLD
         rank = comm.Get_rank()
         size = comm.Get_size()
 
-        omegas_origen = np.array([vertices[0]])
-        deltas_origen = np.array(vertices[1:])
-        vertices_fase = vertices
+        omegas_origen = [vertices[0]]
+        deltas_origen = list(vertices[1:])
+        vertices_fase = list(vertices)
 
         omegas_ciclo = omegas_origen
         deltas_ciclo = deltas_origen
 
         total = len(vertices_fase) - 2
-
-        for i in range(len(vertices_fase) - 2):
+        for i in range(total):
             if rank == 0:
                 self.logger.debug(f"total: {total - i}")
-                omegas_ciclo = [vertices_fase[0]]
-                deltas_ciclo = vertices_fase[1:]
-            else:
-                omegas_ciclo = None
-                deltas_ciclo = None
-
-            omegas_ciclo = comm.bcast(omegas_ciclo, root=0)
-            deltas_ciclo = comm.bcast(deltas_ciclo, root=0)
-
-            # --- Ciclo interno: ir agregando deltas a omega ---
+            # Cada ciclo, repartir deltas entre procesos
             for j in range(len(deltas_ciclo) - 1):
+                # Preparar lista de argumentos para cada delta
                 if rank == 0:
                     args_list = [
-                        (
-                            deltas_ciclo[k],
-                            omegas_ciclo,
-                            self.sia_subsistema.tpm,
-                            self.sia_subsistema.estado_inicial,
-                            self.sia_dists_marginales
-                        )
+                        (deltas_ciclo[k], omegas_ciclo)
                         for k in range(len(deltas_ciclo))
                     ]
-                    chunks = chunk_list(args_list, size)
+                    # Dividir en chunks para cada proceso
+                    chunk_size = (len(args_list) + size - 1) // size
+                    chunks = [args_list[k*chunk_size:(k+1)*chunk_size] for k in range(size)]
                 else:
                     chunks = None
 
                 my_chunk = comm.scatter(chunks, root=0)
-                my_results = [funcion_submodular_serializable(args) for args in my_chunk]
+                my_results = [self.funcion_submodular(*args) for args in my_chunk]
                 all_results = comm.gather(my_results, root=0)
 
                 if rank == 0:
                     resultados = [item for sublist in all_results for item in sublist]
-                    emd_local = 1e5
+                    emd_local = float('inf')
                     indice_mip = None
                     for k, (emd_union, emd_delta, dist_marginal_delta) in enumerate(resultados):
                         emd_iteracion = emd_union - emd_delta
@@ -294,14 +210,13 @@ class QNodes(SIA):
                         emd_particion_candidata = emd_delta
                         dist_particion_candidata = dist_marginal_delta
 
-                    omegas_ciclo = omegas_ciclo + [deltas_ciclo[indice_mip]]
-                    deltas_ciclo = list(deltas_ciclo)
+                    if indice_mip is None:
+                        indice_mip = 0  # fallback
+
+                    omegas_ciclo.append(deltas_ciclo[indice_mip])
                     deltas_ciclo.pop(indice_mip)
 
-                omegas_ciclo = comm.bcast(omegas_ciclo, root=0)
-                deltas_ciclo = comm.bcast(deltas_ciclo, root=0)
-
-            # --- Fin del ciclo interno, guardar partición ---
+            # Solo el proceso 0 actualiza la memoria y los conjuntos
             if rank == 0:
                 clave = (
                     deltas_ciclo[LAST_IDX]
@@ -323,16 +238,12 @@ class QNodes(SIA):
                 omegas_ciclo.pop()
                 omegas_ciclo.append(par_candidato)
                 vertices_fase = omegas_ciclo
-            else:
-                vertices_fase = None
-                omegas_ciclo = None
-                deltas_ciclo = None
 
+            # Sincronizar los conjuntos para todos los procesos
             omegas_ciclo = comm.bcast(omegas_ciclo, root=0)
             deltas_ciclo = comm.bcast(deltas_ciclo, root=0)
             vertices_fase = comm.bcast(vertices_fase, root=0)
 
-        # Solo el proceso 0 retorna el resultado final
         if rank == 0:
             return min(
                 self.memoria_particiones, key=lambda k: self.memoria_particiones[k][0]
@@ -342,10 +253,41 @@ class QNodes(SIA):
     def funcion_submodular(
         self, deltas: Union[tuple, list[tuple]], omegas: list[Union[tuple, list[tuple]]]
     ):
-        thread_id = threading.get_ident()
-        active_threads = threading.active_count()
-        start = time.time()
-    
+        """
+        Evalúa el impacto de combinar el conjunto de nodos individual delta y su agrupación con el conjunto omega, calculando la diferencia entre EMD (Earth Mover's Distance) de las configuraciones, en conclusión los nodos delta evaluados individualmente y su combinación con el conjunto omega.
+
+        El proceso se realiza en dos fases principales:
+
+        1. Evaluación Individual:
+           - Crea una copia del estado temporal del subsistema.
+           - Activa los nodos delta en su tiempo correspondiente (presente/futuro).
+           - Si el delta ya fue evaluado antes, recupera su EMD y distribución marginal de memoria
+           - Si no, ha de:
+             * Identificar dimensiones activas en presente y futuro.
+             * Realiza bipartición del subsistema con esas dimensiones.
+             * Calcular la distribución marginal y EMD respecto al subsistema.
+             * Guarda resultados en memoria para seguro un uso futuro.
+
+        2. Evaluación Combinada:
+           - Sobre la misma copia temporal, activa también los nodos omega.
+           - Calcula dimensiones activas totales (delta + omega).
+           - Realiza bipartición del subsistema completo.
+           - Obtiene EMD de la combinación.
+
+        Args:
+            deltas: Un nodo individual (tupla) o grupo de nodos (lista de tuplas)
+                   donde cada tupla está identificada por su (tiempo, índice), sea el tiempo t_0 identificado como 0, t_1 como 1 y, el índice hace referencia a las variables/dimensiones habilitadas para operaciones de substracción/marginalización sobre el subsistema, tal que genere la partición.
+            omegas: Lista de nodos ya agrupados, puede contener tuplas individuales
+                   o listas de tuplas para grupos formados por los pares candidatos o más uniones entre sí (grupos candidatos).
+
+        Returns:
+            tuple: (
+                EMD de la combinación omega y delta,
+                EMD del delta individual,
+                Distribución marginal del delta individual
+            )
+            Esto lo hice así para hacer almacenamiento externo de la emd individual y su distribución marginal en las particiones candidatas.
+        """
         emd_delta = INFTY_NEG
         temporal = [[], []]
 
@@ -392,8 +334,7 @@ class QNodes(SIA):
         )
         vector_union_marginal = particion_union.distribucion_marginal()
         emd_union = emd_efecto(vector_union_marginal, self.sia_dists_marginales)
-    
-    
+ 
         return emd_union, emd_delta, vector_delta_marginal
 
     def nodes_complement(self, nodes: list[tuple[int, int]]):
