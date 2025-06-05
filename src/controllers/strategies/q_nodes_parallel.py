@@ -100,7 +100,9 @@ class QNodesParallel(SIA):
 
     def algorithm(self, vertices_totales):
         total_vertices = len(vertices_totales)
-        batch_size = max(2, total_vertices // (self.num_workers * 2))
+        batch_size = max(2, total_vertices // (self.num_workers * 2)) 
+        """total_vertices // (self.num_workers * 2): Divide el total de elementos entre el doble del número de workers, para crear más lotes que workers y así balancear mejor la carga.
+max(    2, ...): Asegura que el tamaño mínimo de cada lote sea 2, evitando lotes demasiado pequeños (de tamaño 0 o 1)."""
         omegas_ciclo = sorted([vertices_totales[0]])
         deltas_restantes = sorted(vertices_totales[1:])
         resultados = {}
@@ -139,15 +141,7 @@ class QNodesParallel(SIA):
         tiempo_total = time.time() - start_time
         return resultados, tiempo_total
     
-    @staticmethod
-    def _process_batch(args):
-        """Worker function for parallel batch processing"""
-        qnodes, deltas_batch, omegas, sia_dists_marginales = args
-        results = []
-        for delta in sorted(deltas_batch):
-            emd_union, emd_delta, vector_delta_marginal = qnodes.funcion_submodular(delta, omegas, sia_dists_marginales)
-            results.append((delta, emd_union, emd_delta, vector_delta_marginal))
-        return results
+    
 
     def funcion_submodular(
         self,
@@ -193,6 +187,18 @@ class QNodesParallel(SIA):
         emd_union = emd_efecto(vector_union_marginal, sia_dists_marginales)
 
         return emd_union, emd_delta, vector_delta_marginal
+    
+    @staticmethod
+    def _process_batch(args):
+        """Worker function for parallel batch processing"""
+        qnodes, deltas_batch, omegas, sia_dists_marginales = args
+        results = []
+        for delta in sorted(deltas_batch):
+            emd_union, emd_delta, vector_delta_marginal = qnodes.funcion_submodular(delta, omegas, sia_dists_marginales)
+            results.append((delta, emd_union, emd_delta, vector_delta_marginal))
+        return results
 
     def nodes_complement(self, nodes: List[Tuple[int, int]]) -> List[Tuple[int, int]]:
         return sorted(list(set(self.vertices) - set(nodes)))
+    
+    
