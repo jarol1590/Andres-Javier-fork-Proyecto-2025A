@@ -27,6 +27,16 @@ class NCube:
                 f"Forma inválida {self.data.shape} para dimensiones {self.dims}"
             )
 
+    def copy(self) -> "NCube":
+        """Crea una copia optimizada de la instancia"""
+        # Versión más eficiente que evita recrear todo
+        new_cube = NCube.__new__(NCube)
+        object.__setattr__(new_cube, 'indice', self.indice)
+        object.__setattr__(new_cube, 'dims', np.copy(self.dims))
+        object.__setattr__(new_cube, 'data', np.copy(self.data))
+        return new_cube
+    
+    
     def condicionar(
         self,
         indices_condicionados: NDArray[np.int8],
@@ -152,4 +162,72 @@ class NCube:
             f"    {dims_str}\n"
             f"    {forma_str}\n"
             f"    data=\n        {datos_str}"
+        )
+
+from functools import lru_cache
+
+class NCubeOptimized(NCube):
+    """Versión optimizada de NCube con memoización en marginalizar"""
+    
+    @lru_cache(maxsize=1024)
+    def marginalizar(self, ejes: tuple) -> "NCube":
+        """Versión con memoización que acepta tuplas"""
+        # Convertir tuplas a array para compatibilidad
+        ejes_array = np.array(ejes, dtype=np.int8)
+        return self._marginalizar_original(ejes_array)
+    
+    def _marginalizar_original(self, ejes: NDArray[np.int8]) -> "NCube":
+        """
+        Marginalizar a nivel del n-cubo permite acoplar o colapsar una o más dimensiones manteniendo la probabilidad condicional.
+        El n-cubo puede esquematizarse de forma tal que se aprecie el solapamiento y promedio ente caras, donde la dimensión más baja es el primer desplazamiento dimensional sobre el arreglo.
+        Es importante validar la intersección de ejes puesto es una rutina llamada en sistema desde marginalizar como particionar.
+
+        Args:
+        ----
+            ejes (NDArray[np.int8]): Arreglo con las dimensiones a marginalizar o eliminar. Se valida que los ejes o dimensiones dadas estén y finalmente alineamos nuevamente con las dimensiones locales, donde con numpy debemos hacer uso de la dimensión complementaria para alinear la dimensión externa a la más interna.
+
+        Returns:
+        -------
+            NCube: El n-cubo marginalizado en las dimensiones dadas. Donde es equivalente el marginalizar sobre (a, b,) que primero en (a,) y luego en (b,) o viceversa.
+
+        Example:
+        -------
+            >>> dimensiones = np.array([2, 3])
+            >>> mi_ncubo
+            NCube(index=0):
+            dims=[0 1 2]
+            shape=(2, 2, 2)
+            data=
+                [[[0. 0.]
+                [1. 1.]],
+                [[1. 1.]
+                [1. 1.]]]
+
+            >>> mi_ncubo.marginalizar(dimensiones)
+            NCube(index=0):
+                dims=[0]
+                shape=(2,)
+                data=
+                    [0.75 0.75]
+
+            Se han agrupado los valores del n-cubo por promedio, dejando los remanentes en la dimension 0.
+        """
+
+        marginable_axis = np.intersect1d(ejes, self.dims)
+        if not marginable_axis.size:
+            return self
+        numero_dims = self.dims.size - 1
+        ejes_locales = tuple(
+            numero_dims - dim_idx
+            for dim_idx, axis in enumerate(self.dims)
+            if axis in marginable_axis
+        )
+        new_dims = np.array(
+            [d for d in self.dims if d not in marginable_axis],
+            dtype=np.int8,
+        )
+        return NCube(
+            data=np.mean(self.data, axis=ejes_locales, keepdims=False),
+            dims=new_dims,
+            indice=self.indice,
         )

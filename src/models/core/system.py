@@ -1,9 +1,15 @@
 import numpy as np
+import math
+import os
 from numpy.typing import NDArray
-
+from multiprocessing import Pool, cpu_count
+from copy import deepcopy
+from typing import Optional, Tuple, List
 from src.funcs.base import reindexar, seleccionar_subestado
 from src.models.enums.notation import Notation
 from src.models.core.ncube import NCube
+import concurrent.futures
+from concurrent.futures import ProcessPoolExecutor
 
 from src.models.base.application import aplicacion
 
@@ -29,6 +35,7 @@ class System:
         estado_inicio: np.ndarray,
         notacion: str = aplicacion.notacion,
     ):
+        
         if estado_inicio.size != (n_nodes := tpm.shape[COLS_IDX]):
             raise ValueError(f"Estado inicial debe tener longitud {n_nodes}")
         self.tpm = tpm 
@@ -228,6 +235,27 @@ class System:
             if cube.indice in valid_futures
         )
         return new_sys
+    
+    @staticmethod
+    def _bipartir_worker(args):
+        cube, alcance, mecanismo = args
+        if cube.indice in alcance:
+            return cube.marginalizar(np.setdiff1d(cube.dims, mecanismo))
+        else:
+            return cube.marginalizar(mecanismo)
+        
+    @staticmethod  
+    def dividir_en_lotes(lista, tam_lote):
+        """Divide una lista en lotes de tamaño tam_lote."""
+        return [lista[i:i+tam_lote] for i in range(0, len(lista), tam_lote)]
+    @staticmethod 
+    def _bipartir_lote(args):
+        cubos_lote, alcance, mecanismo = args
+        return [
+            cube.marginalizar(np.setdiff1d(cube.dims, mecanismo)) if cube.indice in alcance
+            else cube.marginalizar(mecanismo)
+            for cube in cubos_lote
+        ]
 
     def bipartir(
         self,
@@ -257,7 +285,82 @@ class System:
             for cube in self.ncubos
         )
         return new_sys
+    
+    def bipartir_parallel(self, alcance: NDArray[np.int8], mecanismo: NDArray[np.int8]) -> "System":
+        n_cores = os.cpu_count() or 4
+        args = [(cube, alcance, mecanismo) for cube in self.ncubos]
+        with ProcessPoolExecutor(max_workers=n_cores) as executor:
+            ncubos_result = list(executor.map(self._bipartir_worker, args))
+        new_sys = System.__new__(System)
+        new_sys.estado_inicial = self.estado_inicial
+        new_sys.tpm = self.tpm
+        new_sys.ncubos = tuple(ncubos_result)
+        return new_sys
+    
+    def bipartir_lotes(self, alcance, mecanismo, pool=None, tam_lote=10):
+        n_cores = os.cpu_count() or 4
+        tam_lote = max(1, len(self.ncubos) // n_cores) if tam_lote is None else tam_lote
+        lotes = self.dividir_en_lotes(self.ncubos, tam_lote)
+        args = [(lote, alcance, mecanismo) for lote in lotes]
+        # Usa el pool existente o crea uno si no se pasa
+        if pool is None:
+            with ProcessPoolExecutor(max_workers=n_cores) as executor:
+                resultados = executor.map(self._bipartir_lote, args)
+                resultados = list(resultados)
+        else:
+            resultados = pool.map(self._bipartir_lote, args)
+            resultados = list(resultados)
+        # Aplana la lista de resultados
+        new_sys = System.__new__(System)
+        new_sys.estado_inicial = self.estado_inicial
+        new_sys.ncubos = tuple(cubo for sublist in resultados for cubo in sublist)
+        return new_sys
+        
+    @staticmethod
+    def _marginal_worker(args):
+        ncubo, estado_inicial = args
+        probabilidad = ncubo.data
+        if ncubo.dims.size:
+            sub_estado_inicial = tuple(estado_inicial[j] for j in ncubo.dims)
+            probabilidad = ncubo.data[seleccionar_subestado(sub_estado_inicial)]
+        return 1 - probabilidad
+    
+    
+    @staticmethod
+    def _marginalizar_lote(args):
+        cubos_lote, estado_inicial = args
+        resultados = []
+        for ncubo in cubos_lote:
+            probabilidad = ncubo.data
+            if ncubo.dims.size:
+                sub_estado_inicial = tuple(estado_inicial[j] for j in ncubo.dims)
+                probabilidad = ncubo.data[seleccionar_subestado(sub_estado_inicial)]
+            resultados.append(1 - probabilidad)
+        return resultados
 
+    def distribucion_marginal_lotes(self, pool=None, tam_lote=10):
+        n_cores = os.cpu_count() or 4
+        tam_lote = max(1, len(self.ncubos) // n_cores) if tam_lote is None else tam_lote
+        lotes = self.dividir_en_lotes(self.ncubos, tam_lote)
+        args = [(lote, self.estado_inicial) for lote in lotes]
+        if pool is None:
+            with ProcessPoolExecutor(max_workers=n_cores) as executor:
+                resultados = executor.map(self._marginalizar_lote, args)
+                resultados = list(resultados)
+        else:
+            resultados = pool.map(self._marginalizar_lote, args)
+            resultados = list(resultados)
+        # Aplana la lista de resultados
+        return np.array([item for sublist in resultados for item in sublist], dtype=np.float32)
+    
+    
+    def distribucion_marginal_parallel(self) -> np.ndarray:
+        n_cores = os.cpu_count() or 4
+        args = [(ncubo, self.estado_inicial) for ncubo in self.ncubos]
+        with ProcessPoolExecutor(max_workers=n_cores) as executor:
+            resultados = list(executor.map(System._marginal_worker, args))
+        return np.array(resultados, dtype=np.float32)
+    
     def distribucion_marginal(self):
         """
         Partiendo de idealmente un subsistema o una bipartición como entrada, se seleccionana los nodos/elementos cuando su estado es OFF o inactivo para cada uno de ellos, mediante la propiedad de las distribuciones marginales, esto nos permite calcular más eficientemente la EMD-Effect, logrando así determinar un coste para dar comparación entre idealmente, un sub-sistema y una bipartición. Hemos de aplicar una reversión en la selección del estado inicial puesto
@@ -284,3 +387,4 @@ class System:
             f"\nInitial state: {self.estado_inicial}"
             f"\nNCubes:\n" + "\n".join(cubes_info)
         )
+

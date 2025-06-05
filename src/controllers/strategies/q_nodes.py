@@ -8,6 +8,8 @@ from src.funcs.format import fmt_biparte_q
 from src.controllers.manager import Manager
 from src.models.base.sia import SIA
 from mpi4py import MPI
+
+
 from src.models.core.solution import Solution
 from src.constants.models import (
     QNODES_ANALYSIS_TAG,
@@ -23,7 +25,6 @@ from src.constants.base import (
     EFECTO,
     ACTUAL,
 )
-
 
 class QNodes(SIA):
    
@@ -104,7 +105,8 @@ class QNodes(SIA):
             tiempo_total=time.time() - self.sia_tiempo_inicio,
             particion=fmt_mip,
         )
-
+        
+    
     def algorithm(self, vertices: list[tuple[int, int]]):
         
         
@@ -270,5 +272,7 @@ class QNodes(SIA):
  
         return emd_union, emd_delta, vector_delta_marginal
 
+    
     def nodes_complement(self, nodes: list[tuple[int, int]]):
         return list(set(self.vertices) - set(nodes))
+
