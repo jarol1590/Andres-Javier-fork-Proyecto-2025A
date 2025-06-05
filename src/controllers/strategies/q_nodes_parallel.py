@@ -43,7 +43,7 @@ class QNodesParallel(SIA):
         self.logger = SafeLogger(QNODES_STRAREGY_TAG)
         
         # Optimize worker count based on CPU cores, but cap at 8 for deterministic behavior
-        self.num_workers = min(4, mp.cpu_count())
+        self.num_workers = min(12, mp.cpu_count())
         self.logger.info(f"Initialized with {self.num_workers} workers")
 
     @profile(context={TYPE_TAG: QNODES_ANALYSIS_TAG})
