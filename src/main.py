@@ -6,7 +6,7 @@ from src.controllers.strategies.q_nodes import QNodes
 def iniciar():
     """Punto de entrada principal"""
                     # ABCD #111111111111111
-    estado_inicial = "001001010111010" #15 bits
+    estado_inicial = "111111111111111" #15 bits
     condiciones =    "111111111111111"
     alcance =        "111111111111111"
     mecanismo =      "111111111111111"

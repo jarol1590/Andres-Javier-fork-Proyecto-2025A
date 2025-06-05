@@ -38,7 +38,7 @@ class QNodes(SIA):
         self.tiempos: tuple[np.ndarray, np.ndarray]
         self.etiquetas = [tuple(s.lower() for s in ABECEDARY), ABECEDARY]
         self.vertices: set[tuple]
-        # self.memoria_delta = dict()
+
         self.memoria_omega = dict()
         self.memoria_particiones = dict()
 
@@ -83,9 +83,16 @@ class QNodes(SIA):
         comm = MPI.COMM_WORLD
         rank = comm.Get_rank()
 
+
+
+        #prohibido eliminar este bloque 
+        comm = MPI.COMM_WORLD
+        rank = comm.Get_rank()
         if rank != 0:
             return None
+        #---------------------------
 
+        #este es el problema que nos dan los procesos que no son el 0
         fmt_mip = fmt_biparte_q(list(mip), self.nodes_complement(mip))
         perdida_mip, dist_marginal_mip = self.memoria_particiones[mip]
 
@@ -99,20 +106,33 @@ class QNodes(SIA):
         )
 
     def algorithm(self, vertices: list[tuple[int, int]]):
+        
+        
         comm = MPI.COMM_WORLD
         rank = comm.Get_rank()
         size = comm.Get_size()
 
+
+        #eliminacion de np.array (no vi la necesidad de tener un np.array si se estan manejando tuplas)
         omegas_origen = [vertices[0]]
+        #grupo omega inicial
+        
+        #print(omegas_origen)
+        
         deltas_origen = list(vertices[1:])
-        vertices_fase = list(vertices)
+        #contiene todos los vertices menos el primero, que es el origen, es como un omega ^-1
+        vertices_fase = list(vertices) #se hace una copia de todos los vertices para controlar el ciclo 
+        
 
         omegas_ciclo = omegas_origen
         deltas_ciclo = deltas_origen
+        #hago una copia de los conjuntos de origen para que no se modifiquen los originales en en el ciclo
 
         total = len(vertices_fase) - 2
         for i in range(total):
             if rank == 0:
+                #esto es priciplamente para que solamente el proceso 0 escriba en el log
+                #aunque eso nunca funciono, como no es prioridad, ni me puse a arreglar eso
                 self.logger.debug(f"total: {total - i}")
             # Cada ciclo, repartir deltas entre procesos
             for j in range(len(deltas_ciclo) - 1):
@@ -127,10 +147,14 @@ class QNodes(SIA):
                     chunks = [args_list[k*chunk_size:(k+1)*chunk_size] for k in range(size)]
                 else:
                     chunks = None
-
+            #Para cada posible delta, prepara los argumentos para evaluar la función submodular.
+            # el proceso 0 divide el trabajo en "chunks" para repartir entre los procesos MPI.
                 my_chunk = comm.scatter(chunks, root=0)
                 my_results = [self.funcion_submodular(*args) for args in my_chunk]
                 all_results = comm.gather(my_results, root=0)
+
+            # Cada proceso recibe su "chunk" de trabajo y calcula los resultados de la función submodular.
+            #    Los resultados se reúnen en el proceso 0.
 
                 if rank == 0:
                     resultados = [item for sublist in all_results for item in sublist]
@@ -151,6 +175,7 @@ class QNodes(SIA):
                     deltas_ciclo.pop(indice_mip)
 
             # Solo el proceso 0 actualiza la memoria y los conjuntos
+            #juntando todos los resultados y  buscando el delta con el menor valor de emd_iteracion
             if rank == 0:
                 clave = (
                     deltas_ciclo[LAST_IDX]
@@ -178,12 +203,20 @@ class QNodes(SIA):
             deltas_ciclo = comm.bcast(deltas_ciclo, root=0)
             vertices_fase = comm.bcast(vertices_fase, root=0)
 
+    
+        #esto causa que solo el proceso 0 retorne el resultado, por lo que 
+        #los otros procesos no tienen que retornar nada
         if rank == 0:
             return min(
                 self.memoria_particiones, key=lambda k: self.memoria_particiones[k][0]
             )
         else:
             return None
+        
+        
+#------------------------------------
+        
+        
     def funcion_submodular(
         self, deltas: Union[tuple, list[tuple]], omegas: list[Union[tuple, list[tuple]]]
     ):
