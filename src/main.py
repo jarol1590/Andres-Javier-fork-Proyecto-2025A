@@ -4,7 +4,7 @@ import numpy as np
 
 
 
-import src.controllers.strategies.q_nodes_sec as QNodesSEC
+from src.controllers.strategies.q_nodes_sec import QNodes
 from src.controllers.strategies.q_nodes import QNodes as QNodesMPI
 
 from src.controllers.strategies.q_nodes_parallel import QNodesParallel
@@ -27,7 +27,7 @@ def iniciar():
   #descomentar segun la estrategia que se quiera probar
   
   
-  #analizador_qn = QNodesSEC(gestor_sistema)
+  #analizador_qn = QNodes(gestor_sistema)
   analizador_qn = QNodesMPI(gestor_sistema)
   #analizador_qn = QNodesParallel(gestor_sistema)
   
