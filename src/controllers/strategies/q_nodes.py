@@ -81,16 +81,13 @@ class QNodes(SIA):
         mip = self.algorithm(vertices)
 
        
-        comm = MPI.COMM_WORLD
-        rank = comm.Get_rank()
-
 
 
         #prohibido eliminar este bloque 
         comm = MPI.COMM_WORLD
         rank = comm.Get_rank()
         if rank != 0:
-            return None
+            return f"Proceso {rank} ha enviado su resultado al maestro"
         #---------------------------
 
         #este es el problema que nos dan los procesos que no son el 0
